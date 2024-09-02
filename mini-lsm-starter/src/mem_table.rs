@@ -107,8 +107,8 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> MemTableIterator {
-        let lower = lower.map(|bs| Bytes::copy_from_slice(bs));
-        let upper = upper.map(|bs| Bytes::copy_from_slice(bs));
+        let lower = lower.map(Bytes::copy_from_slice);
+        let upper = upper.map(Bytes::copy_from_slice);
         let mut iter = MemTableIterator::new(
             Arc::clone(&self.map),
             |map| map.range((lower, upper)),
