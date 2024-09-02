@@ -109,6 +109,12 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIter
         assert!(!iter.1.is_valid() || iter.1.key() > self.key());
         Ok(())
     }
+
+    fn invalidate(&mut self) {
+        self.iters.clear();
+        self.current.take();
+        assert!(!self.is_valid());
+    }
 }
 
 impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIterator
@@ -135,12 +141,18 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         self.advance_iters()?;
 
         let mut current = self.current.take().expect("is valid");
-        current.1.next()?;
+        if let Err(e) = current.1.next() {
+            self.invalidate();
+            return Err(e);
+        }
         if current.1.is_valid() {
             self.iters.push(current);
         }
         self.current = self.iters.pop();
-        self.advance_iters()?;
+        if let Err(e) = self.advance_iters() {
+            self.invalidate();
+            return Err(e);
+        }
 
         Ok(())
     }
