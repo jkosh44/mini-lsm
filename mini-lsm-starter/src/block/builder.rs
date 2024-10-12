@@ -63,7 +63,7 @@ impl BlockBuilder {
         }
     }
 
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         // data
         self.data.len() +
             // offsets
