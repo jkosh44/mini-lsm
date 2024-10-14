@@ -1,1 +1,0 @@
-../../../mini-lsm/src/tests/harness.rs
