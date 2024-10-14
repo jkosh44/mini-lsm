@@ -1,1 +1,0 @@
-../../../mini-lsm/src/tests/week1_day2.rs
