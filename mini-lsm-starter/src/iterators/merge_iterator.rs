@@ -54,7 +54,7 @@ impl<I: StorageIterator> MergeIterator<I> {
 }
 
 impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIterator<I> {
-    /// Advance all iters in `self.iters` s.t. they are all less than `self.current`.
+    /// Advance all iters in `self.iters` s.t. they are all greater than `self.current`.
     fn advance_iters(&mut self) -> Result<()> {
         if !self.is_valid() {
             return Ok(());
