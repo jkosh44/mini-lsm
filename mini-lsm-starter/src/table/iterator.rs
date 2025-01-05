@@ -69,7 +69,9 @@ impl SsTableIterator {
             .binary_search_by_key(&key, |meta| meta.first_key.as_key_slice())
             .unwrap_or_else(|idx| idx);
         // Move to next block if this block's last key is less than our key.
-        if idx < self.table.block_meta.len() - 1 && self.table.block_meta[idx].last_key.as_key_slice() < key {
+        if idx < self.table.block_meta.len() - 1
+            && self.table.block_meta[idx].last_key.as_key_slice() < key
+        {
             idx += 1;
         }
         // Bound idx at last block.
@@ -99,7 +101,12 @@ impl StorageIterator for SsTableIterator {
 
     /// Return whether the current block iterator is valid or not.
     fn is_valid(&self) -> bool {
-        assert!(self.blk_iter.is_valid() || self.blk_idx == self.table.num_of_blocks());
+        assert!(
+            self.blk_iter.is_valid() || self.blk_idx == self.table.num_of_blocks() - 1,
+            "blk_idx={:?}, num_block={:?}",
+            self.blk_idx,
+            self.table.num_of_blocks()
+        );
         self.blk_iter.is_valid()
     }
 
@@ -107,7 +114,7 @@ impl StorageIterator for SsTableIterator {
     /// Note: You may want to check if the current block iterator is valid after the move.
     fn next(&mut self) -> Result<()> {
         self.blk_iter.next();
-        if !self.blk_iter.is_valid() && self.blk_idx < self.table.num_of_blocks() - 1 {
+        while !self.blk_iter.is_valid() && self.blk_idx < self.table.num_of_blocks() - 1 {
             self.blk_idx += 1;
             let block = self.table.read_block_cached(self.blk_idx)?;
             self.blk_iter = BlockIterator::create_and_seek_to_first(block);
