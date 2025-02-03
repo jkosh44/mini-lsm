@@ -61,6 +61,10 @@ impl StorageIterator for LsmIterator {
         self.past_upper = self.is_past_upper();
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
+    }
 }
 
 enum NextState {
@@ -150,5 +154,9 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
             NextState::Invalid => Ok(()),
             NextState::Errored(e) => Err(anyhow!("{e}")),
         }
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.iter.num_active_iterators()
     }
 }
