@@ -67,7 +67,6 @@ impl<
     }
 
     fn is_valid(&self) -> bool {
-        println!("Merge a: {}; b: {}", self.a.is_valid(), self.b.is_valid());
         self.a.is_valid() || self.b.is_valid()
     }
 
@@ -87,6 +86,10 @@ impl<
         self.active_iter = active_iter(&self.a, &self.b);
 
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
     }
 }
 

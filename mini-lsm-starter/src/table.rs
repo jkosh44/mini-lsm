@@ -49,8 +49,12 @@ impl BlockMeta {
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
     pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
         for block_meta in block_meta {
-            assert!(block_meta.offset <= u16::MAX as usize);
-            let offset_bytes = (block_meta.offset as u16).to_le_bytes();
+            assert!(
+                block_meta.offset <= u32::MAX as usize,
+                "{} too big",
+                block_meta.offset
+            );
+            let offset_bytes = (block_meta.offset as u32).to_le_bytes();
             assert!(block_meta.first_key.len() <= u16::MAX as usize);
             let first_key_len_bytes = (block_meta.first_key.len() as u16).to_le_bytes();
             let first_key_bytes = block_meta.first_key.raw_ref().iter().cloned();
@@ -71,7 +75,7 @@ impl BlockMeta {
     pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
         let mut block_metas = Vec::new();
         while buf.has_remaining() {
-            let offset = buf.get_u16_le() as usize;
+            let offset = buf.get_u32_le() as usize;
             let first_key_len = buf.get_u16_le() as usize;
             let first_key = buf.copy_to_bytes(first_key_len);
             let first_key = KeyBytes::from_bytes(first_key);

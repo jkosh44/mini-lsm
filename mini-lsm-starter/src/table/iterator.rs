@@ -122,4 +122,8 @@ impl StorageIterator for SsTableIterator {
 
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        self.table.num_of_blocks() - self.blk_idx
+    }
 }
