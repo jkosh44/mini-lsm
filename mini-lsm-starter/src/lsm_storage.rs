@@ -23,7 +23,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -164,7 +164,16 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        self.flush_notifier.send(())?;
+        self.compaction_notifier.send(())?;
+        self.flush_thread.lock().take().unwrap().join().unwrap();
+        self.compaction_thread
+            .lock()
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -248,6 +257,10 @@ impl LsmStorageInner {
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
         let path = path.as_ref();
         let state = LsmStorageState::create(&options);
+
+        if !path.exists() {
+            std::fs::create_dir_all(path)?;
+        }
 
         let compaction_controller = match &options.compaction_options {
             CompactionOptions::Leveled(options) => {
@@ -411,7 +424,35 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let _state_lock = self.state_lock.lock();
+
+        let memtable = {
+            let state_guard = self.state.read();
+            let Some(memtable) = state_guard.imm_memtables.last() else {
+                return Ok(());
+            };
+            memtable.clone()
+        };
+
+        let mut builder = SsTableBuilder::new(self.options.block_size);
+        memtable.flush(&mut builder)?;
+        let sst = builder.build(
+            memtable.id(),
+            Some(self.block_cache.clone()),
+            self.path_of_sst(memtable.id()),
+        )?;
+
+        {
+            let mut state_guard = self.state.write();
+            let mut state = state_guard.as_ref().clone();
+            let last = state.imm_memtables.pop().expect("non-empty");
+            assert_eq!(memtable.id(), last.id());
+            state.l0_sstables.insert(0, sst.sst_id());
+            state.sstables.insert(sst.sst_id(), Arc::new(sst));
+            *state_guard = Arc::new(state);
+        }
+
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -442,13 +483,36 @@ impl LsmStorageInner {
         for sst_id in state.sst_ids() {
             let table = state.sstables.get(sst_id).expect("known to exist");
             let table = Arc::clone(table);
+            match upper {
+                Bound::Included(upper) => {
+                    if KeySlice::from_slice(upper) < table.first_key().as_key_slice() {
+                        continue;
+                    }
+                }
+                Bound::Excluded(upper) => {
+                    if KeySlice::from_slice(upper) <= table.first_key().as_key_slice() {
+                        continue;
+                    }
+                }
+                Bound::Unbounded => {}
+            }
             match lower {
+                Bound::Included(lower)
+                    if KeySlice::from_slice(lower) > table.last_key().as_key_slice() =>
+                {
+                    continue;
+                }
                 Bound::Included(lower) => {
                     let iter = SsTableIterator::create_and_seek_to_key(
                         table,
                         KeySlice::from_slice(lower),
                     )?;
                     sst_iters.push(Box::new(iter));
+                }
+                Bound::Excluded(lower)
+                    if KeySlice::from_slice(lower) >= table.last_key().as_key_slice() =>
+                {
+                    continue;
                 }
                 Bound::Excluded(lower) => {
                     let mut iter = SsTableIterator::create_and_seek_to_key(
