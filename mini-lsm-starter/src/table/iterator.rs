@@ -74,6 +74,10 @@ impl SsTableIterator {
         {
             idx += 1;
         }
+        // Move to the previous block if it's last key is greater than our key.
+        if idx > 0 && self.table.block_meta[idx - 1].last_key.as_key_slice() >= key {
+            idx -= 1;
+        }
         // Bound idx at last block.
         if idx >= self.table.block_meta.len() {
             idx = self.table.block_meta.len() - 1;

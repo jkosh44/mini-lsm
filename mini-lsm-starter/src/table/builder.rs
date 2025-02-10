@@ -20,6 +20,7 @@ use bytes::Bytes;
 
 use super::{BlockMeta, FileObject, SsTable};
 use crate::key::KeyBytes;
+use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 
 /// Builds an SSTable from key-value pairs.
@@ -28,6 +29,7 @@ pub struct SsTableBuilder {
     first_key: Vec<u8>,
     last_key: Vec<u8>,
     data: Vec<u8>,
+    key_hashes: Vec<u32>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
 }
@@ -41,6 +43,7 @@ impl SsTableBuilder {
             first_key: Vec::new(),
             last_key: Vec::new(),
             data: Vec::new(),
+            key_hashes: Vec::new(),
             meta: Vec::new(),
             block_size,
         }
@@ -57,8 +60,10 @@ impl SsTableBuilder {
 
         // TODO(jkosh44) This seems really wasteful.
         self.last_key = key.raw_ref().to_vec();
+        let key_hash = farmhash::fingerprint32(key.raw_ref());
+        self.key_hashes.push(key_hash);
 
-        if self.builder.add(key, value) {
+        if !self.builder.add(key, value) {
             self.build_block();
         }
     }
@@ -79,10 +84,14 @@ impl SsTableBuilder {
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
         self.build_block();
-        let block_meta_offset = self.data.len();
         let mut data = self.data;
+        let block_meta_offset = data.len();
         BlockMeta::encode_block_meta(&self.meta, &mut data);
         data.extend((block_meta_offset as u32).to_le_bytes());
+        let bloom_filter_offset = data.len();
+        let bloom_filter = Bloom::new(&self.key_hashes, 0.01);
+        bloom_filter.encode(&mut data);
+        data.extend((bloom_filter_offset as u32).to_le_bytes());
         let file = FileObject::create(path.as_ref(), data)?;
 
         // TODO(jkosh44) Is this right?
@@ -91,6 +100,7 @@ impl SsTableBuilder {
             (None, None) => (KeyBytes::default(), KeyBytes::default()),
             _ => unreachable!(),
         };
+
         Ok(SsTable {
             file,
             block_meta: self.meta,
@@ -99,7 +109,7 @@ impl SsTableBuilder {
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: Some(bloom_filter),
             max_ts: 0,
         })
     }
