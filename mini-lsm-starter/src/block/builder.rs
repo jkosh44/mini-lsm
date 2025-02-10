@@ -28,24 +28,42 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        let mut first_key_short_circuit = false;
+        let mut is_first_key = false;
         if self.is_empty() {
-            self.first_key = key.to_key_vec();
-            first_key_short_circuit = true;
+            is_first_key = true;
         }
 
         self.offsets.push(self.data.len() as u16);
-        let key_len = key.len() as u16;
+
+        // Compute how much of the key overlaps with the first key.
+        let key_overlap_len = key
+            .raw_ref()
+            .iter()
+            .zip(self.first_key.raw_ref())
+            .enumerate()
+            .find_map(|(idx, (key, first_key))| if key != first_key { Some(idx) } else { None })
+            .unwrap_or_else(|| std::cmp::min(key.len(), self.first_key.len()));
+        let rest_key_len = key.len() - key_overlap_len;
+        let rest_of_key = &key.raw_ref()[key_overlap_len..];
+        let key_overlap_len = key_overlap_len as u16;
+        let rest_key_len = rest_key_len as u16;
+
         let value_len = value.len() as u16;
         let bytes = std::iter::empty()
-            .chain(key_len.to_le_bytes())
-            .chain(key.raw_ref().iter().cloned())
+            .chain(key_overlap_len.to_le_bytes())
+            .chain(rest_key_len.to_le_bytes())
+            .chain(rest_of_key.iter().cloned())
             .chain(value_len.to_le_bytes())
             .chain(value.iter().cloned());
         self.data.extend(bytes);
 
+        if is_first_key {
+            assert_eq!(key.len(), rest_of_key.len());
+            self.first_key = KeyVec::from_vec(rest_of_key.to_vec());
+        }
+
         let size = self.size();
-        first_key_short_circuit || size < self.block_size
+        is_first_key || size < self.block_size
     }
 
     /// Check if there is no key-value pair in the block.
@@ -64,11 +82,6 @@ impl BlockBuilder {
     }
 
     pub fn size(&self) -> usize {
-        // data
-        self.data.len() +
-            // offsets
-            (self.offsets.len() * size_of::<u16>()) +
-            // num_elements
-            size_of::<u16>()
+        self.data.len()
     }
 }

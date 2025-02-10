@@ -79,17 +79,24 @@ impl BlockIterator {
         if self.idx < self.block.num_elements() {
             let offset = self.block.offsets[self.idx] as usize;
             let data = &self.block.data[offset..];
-            let (key_len, data) = (&data[..KEY_LEN_SIZE], &data[KEY_LEN_SIZE..]);
-            let key_len = u16::from_le_bytes(key_len.try_into().expect("correct size")) as usize;
-            let (key, data) = (&data[..key_len], &data[key_len..]);
 
-            self.key = KeyVec::from_vec(key.to_vec());
+            let (key_overlap_len, data) = (&data[..KEY_LEN_SIZE], &data[KEY_LEN_SIZE..]);
+            let key_overlap_len =
+                u16::from_le_bytes(key_overlap_len.try_into().expect("correct size")) as usize;
+            let (rest_key_len, data) = (&data[..KEY_LEN_SIZE], &data[KEY_LEN_SIZE..]);
+            let rest_key_len =
+                u16::from_le_bytes(rest_key_len.try_into().expect("correct size")) as usize;
+            let key_prefix = &self.first_key.raw_ref()[..key_overlap_len];
+            let (key_suffix, data) = (&data[..rest_key_len], &data[rest_key_len..]);
+            let mut key = key_prefix.to_vec();
+            key.extend_from_slice(key_suffix);
+            self.key = KeyVec::from_vec(key);
 
             let value_len = &data[..VALUE_LEN_SIZE];
             let value_len =
                 u16::from_le_bytes(value_len.try_into().expect("correct size")) as usize;
 
-            let value_start = offset + KEY_LEN_SIZE + key_len + VALUE_LEN_SIZE;
+            let value_start = offset + KEY_LEN_SIZE + KEY_LEN_SIZE + rest_key_len + VALUE_LEN_SIZE;
             let value_end = value_start + value_len;
 
             self.value_range = (value_start, value_end);
