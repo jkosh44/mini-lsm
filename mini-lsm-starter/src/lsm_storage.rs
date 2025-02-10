@@ -336,34 +336,18 @@ impl LsmStorageInner {
             .filter_map(|memtable| memtable.get(key))
             .next();
 
-        let lower = Bound::Included(key);
         let mut sst_iters = Vec::with_capacity(state.sstables.len());
         for sst_id in state.sst_ids() {
             let table = state.sstables.get(sst_id).expect("known to exist");
             let table = Arc::clone(table);
-            match lower {
-                Bound::Included(lower) => {
-                    let iter = SsTableIterator::create_and_seek_to_key(
-                        table,
-                        KeySlice::from_slice(lower),
-                    )?;
-                    sst_iters.push(Box::new(iter));
-                }
-                Bound::Excluded(lower) => {
-                    let mut iter = SsTableIterator::create_and_seek_to_key(
-                        table,
-                        KeySlice::from_slice(lower),
-                    )?;
-                    if iter.is_valid() && iter.key() == KeySlice::from_slice(lower) {
-                        iter.next()?;
-                    }
-                    sst_iters.push(Box::new(iter));
-                }
-                Bound::Unbounded => {
-                    let iter = SsTableIterator::create_and_seek_to_first(table)?;
-                    sst_iters.push(Box::new(iter));
+            if let Some(bloom) = &table.bloom {
+                let key_hash = farmhash::fingerprint32(key);
+                if !bloom.may_contain(key_hash) {
+                    continue;
                 }
             }
+            let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?;
+            sst_iters.push(Box::new(iter));
         }
         let sst_iters = MergeIterator::create(sst_iters);
 
@@ -552,7 +536,7 @@ impl LsmStorageInner {
         let sst_iters = MergeIterator::create(sst_iters);
 
         let lsm_iter_inner = TwoMergeIterator::create(mem_iters, sst_iters)?;
-        let upper = upper.map(|upper| Bytes::copy_from_slice(upper));
+        let upper = upper.map(Bytes::copy_from_slice);
         let lsm_iter = LsmIterator::new(lsm_iter_inner, upper)?;
         let fused_iter = FusedIterator::new(lsm_iter);
         Ok(fused_iter)
