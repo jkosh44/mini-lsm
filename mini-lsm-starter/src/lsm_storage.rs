@@ -30,6 +30,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -317,47 +318,14 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        fn transform_tombstone(value: Bytes) -> Option<Bytes> {
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
+        let lower = Bound::Included(key);
+        let upper = Bound::Included(key);
+        let iter = self.scan(lower, upper)?;
+        if iter.is_valid() {
+            Ok(Some(Bytes::copy_from_slice(iter.value())))
+        } else {
+            Ok(None)
         }
-
-        let state = Arc::clone(&self.state.read());
-
-        let mem_value = std::iter::once(&state.memtable)
-            .chain(state.imm_memtables.iter())
-            .filter_map(|memtable| memtable.get(key))
-            .next();
-
-        let mut sst_iters = Vec::with_capacity(state.sstables.len());
-        for sst_id in state.sst_ids() {
-            let table = state.sstables.get(sst_id).expect("known to exist");
-            let table = Arc::clone(table);
-            if let Some(bloom) = &table.bloom {
-                let key_hash = farmhash::fingerprint32(key);
-                if !bloom.may_contain(key_hash) {
-                    continue;
-                }
-            }
-            let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?;
-            sst_iters.push(Box::new(iter));
-        }
-        let sst_iters = MergeIterator::create(sst_iters);
-
-        let value = mem_value
-            .or_else(|| {
-                if sst_iters.is_valid() && sst_iters.key() == KeySlice::from_slice(key) {
-                    Some(Bytes::copy_from_slice(sst_iters.value()))
-                } else {
-                    None
-                }
-            })
-            .map(|value| if value.is_empty() { None } else { Some(value) });
-
-        Ok(value.flatten())
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -467,6 +435,7 @@ impl LsmStorageInner {
     ) -> Result<FusedIterator<LsmIterator>> {
         let state = Arc::clone(&self.state.read());
 
+        // Gather memtable iterators.
         let memtable_scan = state.memtable.scan(lower, upper);
         let imm_memtables_scan = state
             .imm_memtables
@@ -478,63 +447,100 @@ impl LsmStorageInner {
             .collect();
         let mem_iters = MergeIterator::create(mem_iters);
 
-        let mut sst_iters = Vec::with_capacity(state.sstables.len());
-        for sst_id in state.sst_ids() {
-            let table = state.sstables.get(sst_id).expect("known to exist");
-            let table = Arc::clone(table);
-            match upper {
-                Bound::Included(upper) => {
-                    if KeySlice::from_slice(upper) < table.first_key().as_key_slice() {
-                        continue;
+        // Gather l0 sst merge iterator.
+        let mut l0_sst_iters = Vec::with_capacity(state.l0_sstables.len());
+        for sst_id in &state.l0_sstables {
+            if let Some(table) = Self::get_sst_table_in_bounds(&state, lower, upper, sst_id) {
+                let iter = match lower {
+                    Bound::Included(lower) => {
+                        SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(lower))?
                     }
-                }
-                Bound::Excluded(upper) => {
-                    if KeySlice::from_slice(upper) <= table.first_key().as_key_slice() {
-                        continue;
+                    Bound::Excluded(lower) => {
+                        let mut iter = SsTableIterator::create_and_seek_to_key(
+                            table,
+                            KeySlice::from_slice(lower),
+                        )?;
+                        if iter.is_valid() && iter.key() == KeySlice::from_slice(lower) {
+                            iter.next()?;
+                        }
+                        iter
                     }
-                }
-                Bound::Unbounded => {}
-            }
-            match lower {
-                Bound::Included(lower)
-                    if KeySlice::from_slice(lower) > table.last_key().as_key_slice() =>
-                {
-                    continue;
-                }
-                Bound::Included(lower) => {
-                    let iter = SsTableIterator::create_and_seek_to_key(
-                        table,
-                        KeySlice::from_slice(lower),
-                    )?;
-                    sst_iters.push(Box::new(iter));
-                }
-                Bound::Excluded(lower)
-                    if KeySlice::from_slice(lower) >= table.last_key().as_key_slice() =>
-                {
-                    continue;
-                }
-                Bound::Excluded(lower) => {
-                    let mut iter = SsTableIterator::create_and_seek_to_key(
-                        table,
-                        KeySlice::from_slice(lower),
-                    )?;
-                    if iter.is_valid() && iter.key() == KeySlice::from_slice(lower) {
-                        iter.next()?;
-                    }
-                    sst_iters.push(Box::new(iter));
-                }
-                Bound::Unbounded => {
-                    let iter = SsTableIterator::create_and_seek_to_first(table)?;
-                    sst_iters.push(Box::new(iter));
-                }
+                    Bound::Unbounded => SsTableIterator::create_and_seek_to_first(table)?,
+                };
+                l0_sst_iters.push(Box::new(iter));
             }
         }
-        let sst_iters = MergeIterator::create(sst_iters);
+        let l0_sst_iter = MergeIterator::create(l0_sst_iters);
 
-        let lsm_iter_inner = TwoMergeIterator::create(mem_iters, sst_iters)?;
+        // Gather l1 sst concat iterator.
+        let mut l1_sst_iters = Vec::with_capacity(state.levels[0].1.len());
+        for sst_id in &state.levels[0].1 {
+            if let Some(table) = Self::get_sst_table_in_bounds(&state, lower, upper, sst_id) {
+                l1_sst_iters.push(table);
+            }
+        }
+        let l1_sst_iter = match lower {
+            Bound::Included(lower) => SstConcatIterator::create_and_seek_to_key(
+                l1_sst_iters,
+                KeySlice::from_slice(lower),
+            )?,
+            Bound::Excluded(lower) => {
+                let mut iter = SstConcatIterator::create_and_seek_to_key(
+                    l1_sst_iters,
+                    KeySlice::from_slice(lower),
+                )?;
+                if iter.is_valid() && iter.key() == KeySlice::from_slice(lower) {
+                    iter.next()?;
+                }
+                iter
+            }
+            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(l1_sst_iters)?,
+        };
+
+        let mem_l0_merge_iter = TwoMergeIterator::create(mem_iters, l0_sst_iter)?;
+        let lsm_iter_inner = TwoMergeIterator::create(mem_l0_merge_iter, l1_sst_iter)?;
         let upper = upper.map(Bytes::copy_from_slice);
         let lsm_iter = LsmIterator::new(lsm_iter_inner, upper)?;
         let fused_iter = FusedIterator::new(lsm_iter);
         Ok(fused_iter)
+    }
+
+    fn get_sst_table_in_bounds(
+        state: &Arc<LsmStorageState>,
+        lower: Bound<&[u8]>,
+        upper: Bound<&[u8]>,
+        sst_id: &usize,
+    ) -> Option<Arc<SsTable>> {
+        let table = state.sstables.get(sst_id).expect("known to exist");
+        let table = Arc::clone(table);
+        match upper {
+            Bound::Included(upper) => {
+                if KeySlice::from_slice(upper) < table.first_key().as_key_slice() {
+                    return None;
+                }
+            }
+            Bound::Excluded(upper) => {
+                if KeySlice::from_slice(upper) <= table.first_key().as_key_slice() {
+                    return None;
+                }
+            }
+            Bound::Unbounded => {}
+        }
+
+        match lower {
+            Bound::Included(lower) => {
+                if KeySlice::from_slice(lower) > table.last_key().as_key_slice() {
+                    return None;
+                }
+            }
+            Bound::Excluded(lower) => {
+                if KeySlice::from_slice(lower) >= table.last_key().as_key_slice() {
+                    return None;
+                }
+            }
+            Bound::Unbounded => {}
+        }
+
+        Some(table)
     }
 }
