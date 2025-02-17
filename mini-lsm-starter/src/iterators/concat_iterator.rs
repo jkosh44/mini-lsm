@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -35,11 +32,32 @@ pub struct SstConcatIterator {
 
 impl SstConcatIterator {
     pub fn create_and_seek_to_first(sstables: Vec<Arc<SsTable>>) -> Result<Self> {
-        unimplemented!()
+        let current = sstables
+            .first()
+            .map(|sstable| SsTableIterator::create_and_seek_to_first(Arc::clone(sstable)))
+            .transpose()?;
+        Ok(Self {
+            current,
+            next_sst_idx: 1,
+            sstables,
+        })
     }
 
     pub fn create_and_seek_to_key(sstables: Vec<Arc<SsTable>>, key: KeySlice) -> Result<Self> {
-        unimplemented!()
+        let idx = sstables
+            .binary_search_by_key(&key, |sstable| sstable.first_key().as_key_slice())
+            .unwrap_or_else(|idx| idx.saturating_sub(1));
+        let current = sstables
+            .get(idx)
+            .map(|sstable| SsTableIterator::create_and_seek_to_key(Arc::clone(sstable), key))
+            .transpose()?;
+        let next_sst_idx = idx + 1;
+
+        Ok(Self {
+            current,
+            next_sst_idx,
+            sstables,
+        })
     }
 }
 
@@ -47,19 +65,35 @@ impl StorageIterator for SstConcatIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current.as_ref().unwrap().key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        match &self.current {
+            Some(iter) => iter.is_valid(),
+            None => false,
+        }
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        assert!(self.is_valid());
+        let current = self.current.as_mut().unwrap();
+        current.next()?;
+        if !current.is_valid() {
+            if self.next_sst_idx < self.sstables.len() {
+                let sst = Arc::clone(&self.sstables[self.next_sst_idx]);
+                let iter = SsTableIterator::create_and_seek_to_first(sst)?;
+                self.current = Some(iter);
+                self.next_sst_idx += 1;
+            } else {
+                self.current = None;
+            }
+        }
+        Ok(())
     }
 
     fn num_active_iterators(&self) -> usize {
