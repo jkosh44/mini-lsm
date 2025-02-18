@@ -128,6 +128,10 @@ impl StorageIterator for SsTableIterator {
     }
 
     fn num_active_iterators(&self) -> usize {
-        self.table.num_of_blocks() - self.blk_idx
+        if self.is_valid() {
+            1
+        } else {
+            0
+        }
     }
 }
