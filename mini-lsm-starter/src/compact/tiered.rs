@@ -32,6 +32,8 @@ pub struct TieredCompactionOptions {
 }
 
 pub struct TieredCompactionController {
+    // TODO(jkosh44) Remove when used.
+    #[allow(unused)]
     options: TieredCompactionOptions,
 }
 

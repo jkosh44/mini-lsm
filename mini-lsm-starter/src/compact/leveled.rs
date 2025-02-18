@@ -35,6 +35,8 @@ pub struct LeveledCompactionOptions {
 }
 
 pub struct LeveledCompactionController {
+    // TODO(jkosh44) Remove when used.
+    #[allow(unused)]
     options: LeveledCompactionOptions,
 }
 
@@ -43,6 +45,8 @@ impl LeveledCompactionController {
         Self { options }
     }
 
+    // TODO(jkosh44) Remove when used.
+    #[allow(unused)]
     fn find_overlapping_ssts(
         &self,
         _snapshot: &LsmStorageState,
