@@ -91,10 +91,11 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIter
         }
 
         if let Some(current) = &self.current {
-            assert!(self
-                .iters
-                .iter()
-                .all(|iter| iter.1.is_valid() && iter.1.key() > current.1.key()));
+            assert!(
+                self.iters
+                    .iter()
+                    .all(|iter| iter.1.is_valid() && iter.1.key() > current.1.key())
+            );
         }
 
         Ok(())

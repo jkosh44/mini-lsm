@@ -128,10 +128,6 @@ impl StorageIterator for SsTableIterator {
     }
 
     fn num_active_iterators(&self) -> usize {
-        if self.is_valid() {
-            1
-        } else {
-            0
-        }
+        if self.is_valid() { 1 } else { 0 }
     }
 }
