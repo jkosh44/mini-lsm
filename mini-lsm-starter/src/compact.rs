@@ -49,7 +49,7 @@ pub enum CompactionTask {
 
 impl CompactionTask {
     // TODO(jkosh44) Remove when used.
-    #[allow(unused)]
+    #[expect(unused)]
     fn compact_to_bottom_level(&self) -> bool {
         match self {
             CompactionTask::ForceFullCompaction { .. } => true,
@@ -106,8 +106,6 @@ impl CompactionController {
 }
 
 impl CompactionController {
-    // TODO(jkosh44) Remove when used.
-    #[allow(unused)]
     pub fn flush_to_l0(&self) -> bool {
         matches!(
             self,
@@ -136,8 +134,24 @@ impl LsmStorageInner {
             state.clone()
         };
         match task {
-            CompactionTask::Leveled(_) | CompactionTask::Tiered(_) => {
+            CompactionTask::Leveled(_) => {
                 unimplemented!()
+            }
+            CompactionTask::Tiered(TieredCompactionTask {
+                tiers,
+                bottom_tier_included: _,
+            }) => {
+                let mut iters = Vec::with_capacity(tiers.len());
+                for (_tier, sst_ids) in tiers {
+                    let sstables = sst_ids
+                        .into_iter()
+                        .map(|id| Arc::clone(&snapshot.sstables[id]))
+                        .collect();
+                    let iter = SstConcatIterator::create_and_seek_to_first(sstables)?;
+                    iters.push(Box::new(iter));
+                }
+                let iter = MergeIterator::create(iters);
+                self.compact_inner(iter)
             }
             CompactionTask::Simple(SimpleLeveledCompactionTask {
                 upper_level: Some(_),

@@ -113,7 +113,7 @@ impl SimpleLeveledCompactionController {
         let mut del = Vec::new();
         let mut new_state = snapshot.clone();
 
-        // Helper fns to access lower level.
+        /// Helper fns to access upper level.
         fn upper_level<'a>(
             state: &'a LsmStorageState,
             upper_level: &'a Option<usize>,
