@@ -1,3 +1,5 @@
+#![allow(dead_code)] // REMOVE THIS LINE once all modules are complete
+
 // Copyright (c) 2022-2025 Alex Chi Z
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::{
     collections::BTreeMap, ops::Bound, os::unix::fs::MetadataExt, path::Path, sync::Arc,
     time::Duration,
@@ -125,10 +128,12 @@ where
         );
         iter.next().unwrap();
     }
-    assert!(!iter.is_valid());
+    assert!(
+        !iter.is_valid(),
+        "iterator should not be valid at the end of the check"
+    );
 }
 
-#[allow(dead_code)]
 pub fn check_iter_result_by_key_and_ts<I>(iter: &mut I, expected: Vec<((Bytes, u64), Bytes)>)
 where
     I: for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
@@ -207,7 +212,6 @@ pub fn generate_sst(
     builder.build(id, block_cache, path.as_ref()).unwrap()
 }
 
-#[allow(dead_code)]
 pub fn generate_sst_with_ts(
     id: usize,
     path: impl AsRef<Path>,
@@ -232,6 +236,22 @@ pub fn sync(storage: &LsmStorageInner) {
 }
 
 pub fn compaction_bench(storage: Arc<MiniLsm>) {
+    fn maybe_print_dump(storage: &Arc<MiniLsm>, prev: &mut HashSet<usize>, key: Option<&str>) {
+        let levels: HashSet<_> = storage
+            .inner
+            .state
+            .read()
+            .levels
+            .iter()
+            .map(|(level, _)| *level)
+            .collect();
+        if levels != *prev {
+            let dump = storage.full_dump(key);
+            println!("{dump}");
+            *prev = levels;
+        }
+    }
+
     let mut key_map = BTreeMap::<usize, usize>::new();
     let gen_key = |i| format!("{:010}", i); // 10B
     let gen_value = |i| format!("{:0110}", i); // 110B
@@ -276,7 +296,12 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
         let value = storage.get(key.as_bytes()).unwrap();
         if let Some(val) = key_map.get(&i) {
             let expected_value = gen_value(*val);
-            assert_eq!(value, Some(Bytes::from(expected_value.clone())));
+            assert_eq!(
+                value,
+                Some(Bytes::from(expected_value.clone())),
+                "key: {key}\n{}",
+                storage.full_dump(Some(&key)),
+            );
             expected_key_value_pairs.push((Bytes::from(key), Bytes::from(expected_value)));
         } else {
             assert!(value.is_none());
@@ -425,8 +450,6 @@ pub fn check_compaction_ratio(storage: Arc<MiniLsm>) {
     }
 }
 
-// TODO(jkosh44) Remove when used.
-#[allow(unused)]
 pub fn dump_files_in_dir(path: impl AsRef<Path>) {
     println!("--- DIR DUMP ---");
     for f in path.as_ref().read_dir().unwrap() {

@@ -25,11 +25,7 @@ pub struct Bloom {
 }
 
 pub trait BitSlice {
-    // TODO(jkosh44) Remove when used.
-    #[allow(unused)]
     fn get_bit(&self, idx: usize) -> bool;
-    // TODO(jkosh44) Remove when used.
-    #[allow(unused)]
     fn bit_len(&self) -> usize;
 }
 
@@ -118,8 +114,6 @@ impl Bloom {
         }
     }
 
-    // TODO(jkosh44) Remove when used.
-    #[allow(unused)]
     /// Check if a bloom filter may contain some data
     pub fn may_contain(&self, mut h: u32) -> bool {
         if self.k > 30 {

@@ -418,7 +418,11 @@ impl LsmStorageInner {
             let mut state = state_guard.as_ref().clone();
             let last = state.imm_memtables.pop().expect("non-empty");
             assert_eq!(memtable.id(), last.id());
-            state.l0_sstables.insert(0, sst.sst_id());
+            if self.compaction_controller.flush_to_l0() {
+                state.l0_sstables.insert(0, sst.sst_id());
+            } else {
+                state.levels.insert(0, (sst.sst_id(), vec![sst.sst_id()]))
+            }
             state.sstables.insert(sst.sst_id(), Arc::new(sst));
             *state_guard = Arc::new(state);
         }
@@ -478,7 +482,7 @@ impl LsmStorageInner {
 
         // Gather lower sst concat iterator.
         let mut leveled_iters = Vec::with_capacity(state.levels.len());
-        for (_, sst_ids) in &state.levels {
+        for (_level_id, sst_ids) in &state.levels {
             let mut cur_leveled_iters = Vec::with_capacity(sst_ids.len());
             for sst_id in sst_ids {
                 if let Some(table) = Self::get_sst_table_in_bounds(&state, lower, upper, sst_id) {
